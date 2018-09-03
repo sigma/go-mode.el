@@ -21,6 +21,7 @@
 (require 'ffap)
 (require 'find-file)
 (require 'ring)
+(require 'tramp)
 (require 'url)
 (require 'xref nil :noerror)  ; xref is new in Emacs 25.1
 
@@ -1069,53 +1070,22 @@ with goflymake \(see URL `https://github.com/dougm/goflymake'), gocode
 The tool used can be set via ‘gofmt-command` (default: gofmt) and additional
 arguments can be set as a list via ‘gofmt-args`."
   (interactive)
-  (let ((tmpfile (make-temp-file "gofmt" nil ".go"))
-        (patchbuf (get-buffer-create "*Gofmt patch*"))
-        (errbuf (if gofmt-show-errors (get-buffer-create "*Gofmt Errors*")))
-        (coding-system-for-read 'utf-8)
-        (coding-system-for-write 'utf-8)
+  (let ((fname (file-local-name (file-truename buffer-file-name)))
         our-gofmt-args)
-
-    (unwind-protect
-        (save-restriction
-          (widen)
-          (if errbuf
-              (with-current-buffer errbuf
-                (setq buffer-read-only nil)
-                (erase-buffer)))
-          (with-current-buffer patchbuf
-            (erase-buffer))
-
-          (write-region nil nil tmpfile)
-
-          (when (and (gofmt--is-goimports-p) buffer-file-name)
-            (setq our-gofmt-args
-                  (append our-gofmt-args
-                          ;; srcdir, despite its name, supports
-                          ;; accepting a full path, and some features
-                          ;; of goimports rely on knowing the full
-                          ;; name.
-                          (list "-srcdir" (file-truename buffer-file-name)))))
-          (setq our-gofmt-args (append our-gofmt-args
-                                       gofmt-args
-                                       (list "-w" tmpfile)))
-          (message "Calling gofmt: %s %s" gofmt-command our-gofmt-args)
-          ;; We're using errbuf for the mixed stdout and stderr output. This
-          ;; is not an issue because gofmt -w does not produce any stdout
-          ;; output in case of success.
-          (if (zerop (apply #'call-process gofmt-command nil errbuf nil our-gofmt-args))
-              (progn
-                (if (zerop (call-process-region (point-min) (point-max) "diff" nil patchbuf nil "-n" "-" tmpfile))
-                    (message "Buffer is already gofmted")
-                  (go--apply-rcs-patch patchbuf)
-                  (message "Applied gofmt"))
-                (if errbuf (gofmt--kill-error-buffer errbuf)))
-            (message "Could not apply gofmt")
-            (if errbuf (gofmt--process-errors (buffer-file-name) tmpfile errbuf))))
-
-      (kill-buffer patchbuf)
-      (delete-file tmpfile))))
-
+    (when (and (gofmt--is-goimports-p) buffer-file-name)
+      (setq our-gofmt-args
+            (append our-gofmt-args
+                    ;; srcdir, despite its name, supports
+                    ;; accepting a full path, and some features
+                    ;; of goimports rely on knowing the full
+                    ;; name.
+                    (list "-srcdir" fname))))
+    (setq our-gofmt-args (append our-gofmt-args
+                                 gofmt-args
+                                 (list "-w" fname)))
+    (message "Calling gofmt: %s %s" gofmt-command our-gofmt-args)
+    (apply #'process-file gofmt-command nil nil nil our-gofmt-args)
+    (revert-buffer nil t t)))
 
 (defun gofmt--process-errors (filename tmpfile errbuf)
   (with-current-buffer errbuf
@@ -1151,10 +1121,13 @@ arguments can be set as a list via ‘gofmt-args`."
 \(add-hook 'before-save-hook 'gofmt-before-save).
 
 Note that this will cause ‘go-mode’ to get loaded the first time
-you save any file, kind of defeating the point of autoloading."
+you save any file, kind of defeating the point of autoloading.
 
+DO NOT USE: instead do
+\(add-hook 'go-mode-hook (lambda () (add-hook 'after-save-hook 'gofmt nil t)))
+"
   (interactive)
-  (when (eq major-mode 'go-mode) (gofmt)))
+  nil)
 
 (defun godoc--read-query ()
   "Read a godoc query from the minibuffer."
